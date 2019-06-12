@@ -10,9 +10,8 @@ import numpy as np
 from scipy.special import comb
 from timeit import default_timer as timer
 from multiprocessing import Pool
-import scipy.special as sp
-import scipy.sparse.linalg as ssl 
-import scipy.linalg as sl
+from scipy.special import eval_hermite as eh
+import scipy.sparse.linalg as spl
 import matplotlib.pyplot as plt
 from copy import deepcopy
 import matplotlib.cm as cm
@@ -56,7 +55,7 @@ def getBaseK(K):
 #-------------Get indices of operated state-------------------------------------
 #very sexy algorithm for finding the exact index of a state
 def searchBasis(state):
-    global BinomialTable
+    #global BinomialTable
     ind=0
     for i in range(0,K):
         #ind+=int(comb(K-1-i + N - (1+ np.sum(state[0:i+1])),K-1-i))
@@ -132,54 +131,53 @@ def getEarr(K):
     return(Earr)
 #--------------------Build the Hamiltonian--------------------------------------    
 def createH(g):
-    global U
+    #global U
     #print(g)
     #Earr=np.arange(0,K)+0.5
-    global bi
-    bi=np.arange(0,Fsize)
-    H=np.zeros((Fsize,Fsize))
+    #global bi
+    bi=np.arange(0,Fsize,dtype=int)
+    H=np.zeros((Fsize,Fsize),dtype=np.float64)
     Earr=getEarr(K)
     H[bi,bi]=np.sum(basis[:]*(Earr),axis=1) #multiple N by (n+1/2)
     for ii in range(0,Fsize):
-        state=basis[ii]
-        for i in range(0,K):
-            for j in range(0,K):
-                for k in range(0,K):
-                    for l in range(0,K):
-                        if ((i+j+k+l)%2==0 ):
-                        #if(U[i,j,k,l]>1E-4):
-                            if (l!=k and state[k]!=0 and state[l]!=0) or (l==k and state[k]>1):
-                               stateout=deepcopy(state)
-                               A=np.sqrt(state[k])
-                               stateout[k]-=1
-                               A+=np.sqrt(state[l])
-                               stateout[l]-=1
-                               A+=np.sqrt(state[i]+1)
-                               stateout[i]+=1
-                               A+=np.sqrt(state[j]+1)
-                               stateout[j]+=1
-
-                              
-                               #print(stateout)
-                               index=searchBasis(stateout) 
-                               #print(state,ii,'in')
-                               #print(stateout,index,'\n')
-                               #print((g/2)*A*U[i,j,k,l])
-                               H[ii,index]+=(g/2)*A*U[i,j,k,l]
-                        else:
-                            continue
+        statei=basis[ii]
+        for k in range(0,K):
+            if statei[k]==0:
+                continue
+            else:
+                for l in range(0,K):
+                    if statei[l]==0  or (l==k and statei[l]==1):
+                        continue
+                    else:
+                        state=statei+0
+                        A=np.sqrt(state[k])
+                        state[k]-=1
+                        A*=np.sqrt(state[l])
+                        state[l]-=1
+                        for i in range(0,K):
+                            for j in range(0,K):
+                                if ((i+j+k+l)%2!=0):
+                                    continue
+                                else:
+                                   stateout=state+0
+                                   B=A*np.sqrt(stateout[i]+1)
+                                   stateout[i]+=1
+                                   B*=np.sqrt(stateout[j]+1)
+                                   stateout[j]+=1
     
-                               
-        
-    #OR IF WE WANT TO BE VERY COOL   
-    #pool = Pool(processes=16)
-    #result_Hi = pool.map_async(newState,basis[0:])
-    #resarr=result_Hi.get(timeout=3)
-    #resarr is the indices of new states and the values we add to H
+                                  
+                                   #print(stateout)
+                                   index=searchBasis(stateout) 
+                                   #print(state,ii,'in')
+                                   #print(stateout,index,'\n')
+                                   #print((g/2)*A*U[i,j,k,l])
+                                   if index>ii:
+                                       H[ii,index]+=(g/2)*B*U[i,j,k,l]
+                                       H[index,ii]+=(g/2)*B*U[i,j,k,l]
+                                   if index==ii:
+                                       H[ii,index]+=(g/2)*B*U[i,j,k,l]
+                                                              
 
-
-    i_lower = np.tril_indices(Fsize, -1)
-    H[i_lower] = H.T[i_lower]
     return(H)
 
 
@@ -188,7 +186,7 @@ def getPsi(L,K):
     global ix,x,dx
     for i in range(0,K):
         A=0
-        Psi[i,ix]=sp.eval_hermite(i,x[ix])*np.exp(-0.5*x[ix]**2)
+        Psi[i,ix]=eh(i,x[ix])*np.exp(-0.5*x[ix]**2)
         A=integ(Psi[i,:]**2)
         Psi[i,:]=Psi[i,:]/np.sqrt(A)
     return(Psi)
@@ -240,11 +238,12 @@ def getPxy(p):
     return(M)
 #Parallel    
 def getPxyParr(p):
-    nd=1
+
+    #nd=2
     M=np.zeros((L//nd,L//nd))
-    itind=np.arange(0,L,nd)
-    global Psi
-    psismaller=Psi[:,itind]
+    itind=np.arange(0,L//nd)
+    
+    psismaller=Psi[:,np.arange(0,L,2)]
     
     func = partial(correlate,p,psismaller)
     #OR IF WE WANT TO BE VERY COOL   
@@ -259,7 +258,7 @@ def getPxyParr(p):
 #Kernel for doing correlations, point*all other points ->vector    
 def correlate(p,psi,it):
     global K
-    out=np.zeros(psi.shape[1])
+    out=np.zeros((psi.shape[1]))
     for i in range(0,K):
         for j in range(0,K):
             out+=p[i,j]*np.conjugate(psi[i,it])*psi[j,:]
@@ -303,11 +302,12 @@ def getp2(gs):
 
 #Parallel    
 def getPxxyyParr(p2):
-    nd=1 #simplifies calculation by using fewer visualizing points
+
+    #nd=2 #simplifies calculation by using fewer visualizing points
     M=np.zeros((L//nd,L//nd))
-    itind=np.arange(0,L,nd)
-    global Psi
-    psismaller=Psi[:,itind]
+    itind=np.arange(0,L//nd)
+
+    psismaller=Psi[:,np.arange(0,L,2)]
     func = partial(correlate2,p2,psismaller)
     #OR IF WE WANT TO BE VERY COOL   
     pool = Pool(processes=16)
@@ -342,18 +342,25 @@ def correlate2(p2,psi,it):
     
 def main():
     #Input parameters
-    global L,K,N,Fsize,xmax,ix,x,dx,basis,U,Psi,BinomialTable
+    global L,K,N,Fsize,xmax,ix,x,dx,basis,U,Psi,BinomialTable,nd
+   
     L=int(2**10)
-    K=int(10) #states
-    N=int(5) #particles bosons
+    K=int(4) #states
+    N=int(10) #particles bosons
     Fsize=int(comb(K-1+N,K-1)) #size of Fock Basis
     xmax=int(10)
     xmin=int(-xmax)
     ix=np.arange(0,L)
     x=np.linspace(xmin,xmax,L)
+    nd=2 #factor which we cut down for visualizing L*L corrs
+    #The scaling for each 2body corr is about 2^(exponent - 6) seconds
+    #where the exponent is the power in L-log2(nd)
+    
+    
+    xnd=np.linspace(xmin,xmax,L//nd)
+    
     dx=x[1]-x[0]
     allplots=True
-    
     
     
     
@@ -361,9 +368,9 @@ def main():
     basis = generate(K,N)
     
     #optional generate indexing in base K for fast operators
-    baseK=getBaseK(16)
+    #baseK=getBaseK(16)
     #and also indexing it
-    bpi=np.arange(0,K**4)
+    #bpi=np.arange(0,K**4)
     #indarr=np.zeros((K**4))
     
     Psi=getPsi(L,K) #get K wavefunction
@@ -372,8 +379,8 @@ def main():
 
 
 
-    NG=12
-    Neig=1
+    NG=9
+    Neig=3
     gmax=int(12)
     gmin=-gmax
     G=np.linspace(gmin,gmax,NG)
@@ -383,10 +390,14 @@ def main():
     E=np.zeros((NG,Neig))
     EV=np.zeros((NG),dtype='object')
     for iii in range(0,NG):
-        print(iii)
+        print(iii, 'of ', NG )
+        S=timer()
         H=createH(G[iii])
-        E[iii],EV[iii]=ssl.eigsh(H,k=Neig,which='SM',maxiter=1E5)
-
+        print('     %.5f H build time'%(timer()-S))
+        S=timer()
+        E[iii],EV[iii]=spl.eigsh(H,k=Neig,which='SM')
+        #E[iii],EV[iii]=spl.eigsh(H,k=Neig,sigma=-1000,maxiter=10000,tol=1E-7)
+        print('     %.5f eigtime \n '%(timer()-S))
     
     
     
@@ -394,53 +405,59 @@ def main():
     cmap = cm.get_cmap('viridis')
     E=E.T
     fig=plt.figure()
-    fig.clf()
     for i in range(0,Neig):
         plt.plot(G,E[i],label='En_%i'%i,color=cmap(i/Neig))
-    plt.plot(0,1,'mx')
+    plt.plot(0,N/2,'mx')
+
+    #plt.savefig('/home/aleksczejdo/Dokumenty/FewBody/KatalogZdjęć/%iParticles/%iN_%iK__SpectrumBoson.png'%(N,N,K))
     plt.show()
-
-    for i in range(0,NG):
+    if allplots==True:
+        for i in range(0,NG):
         
         
-        print('g=',G[i])
-        
-        #Get 1 particle Density matrix
-        n1=getp(EV[i][:,0])
-        print(np.trace(n1),'traceP')
-        p=n1*1.0
-        
-        #1 particle density corr
-        S=timer()
-        Pxy=getPxyParr(p)
-        print(timer()-S,'Pxy time')
-
-        #2 particle dm
-        n2=getp2(EV[i][:,0])
-        print(np.trace(n2),'traceP2')
-        p2=n2*1.0
-
-        #2particle desnity corr contracting so x'=x y'=y
-        S=timer()
-        Pxxyy=getPxxyyParr(p2)
-        print(timer()-S,'Pxxyy time')
-
-        
-        """plt.imshow(Pmat)
-        plt.show()
-        plt.imshow(Pxy)
-        plt.show()
-        fig=plt.figure()
-        fig.clf()
-        plt.plot(x,np.diag(Pxy))
-        plt.title('diag Pxy')
-        plt.show()
-        plt.imshow(Pmat2)
-        plt.show()
-        plt.imshow(Pxxyy)
-        plt.show()
-        """
-        if allplots==True:
+            print('g= ', G[i],',    %i  of %i'%(i,NG))
+            
+            #Get 1 particle Density matrix
+            n1=getp(EV[i][:,0])
+            #print(np.trace(n1),'traceP')
+            p=n1*1.0
+            
+            #1 particle density corr
+            S=timer()
+            Pxy=getPxyParr(p)
+            Spxy=timer()-S
+            #print(timer()-S,'Pxy time')
+    
+            #2 particle dm
+            n2=getp2(EV[i][:,0])
+            #print(np.trace(n2),'traceP2')
+            p2=n2*1.0
+    
+            #2particle desnity corr contracting so x'=x y'=y
+            S=timer()
+            Pxxyy=getPxxyyParr(p2)
+            #print(timer()-S,'Pxxyy time')
+            Spxxyy=timer()-S
+            
+            if i==0:
+                print(np.trace(n1),'traceP')
+                print(Spxy,'Pxy time')
+                print(np.trace(n2),'traceP2')
+                print(Spxxyy,'Pxxyy time')
+            """plt.imshow(Pmat)
+            plt.show()
+            plt.imshow(Pxy)
+            plt.show()
+            fig=plt.figure()
+            fig.clf()
+            plt.plot(x,np.diag(Pxy))
+            plt.title('diag Pxy')
+            plt.show()
+            plt.imshow(Pmat2)
+            plt.show()
+            plt.imshow(Pxxyy)
+            plt.show()
+            """
             plt.figure(figsize=(14,14))
             
             ax1= plt.subplot(3,2,1)
@@ -453,7 +470,7 @@ def main():
         
             
             ax3=plt.subplot(3,1,3)
-            ax3.plot(x,np.diag(Pxy))
+            ax3.plot(xnd,np.diag(Pxy))
             ax3.set_aspect(16)
             plt.title('diag Pij')
         
@@ -469,7 +486,7 @@ def main():
             
             plt.tight_layout()
             plt.suptitle('%i Particles %i Exctited States \n %.4f Coupling'%(N,K,G[i]))
-            plt.savefig('/home/aleksczejdo/Dokumenty/FewBody/KatalogZdjęć/%iParticles/%iN_%iK_%.4fG_Boson.png'%(N,N,K,G[i]))
+            #plt.savefig('/home/aleksczejdo/Dokumenty/FewBody/KatalogZdjęć/%iParticles/%iN_%iK_%.4fG_Boson.png'%(N,N,K,G[i]))
     return()
 main()
     
